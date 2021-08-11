@@ -1,0 +1,6 @@
+[submodule "probabilistic-models"]
+	path = probabilistic-models
+	url = git@gitlab.lrz.de:i7/probabilistic-models.git
+[submodule "lib/models"]
+	path = lib/models
+	url = git@gitlab.lrz.de:i7/probabilistic-models.git

@@ -1,0 +1,50 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group 'mc'
+version '0.1'
+
+repositories {
+    mavenCentral()
+    jcenter()
+}
+
+dependencies {
+    implementation project('lib:models')
+    implementation group: 'it.unimi.dsi', name: 'fastutil', version: '8.5.4'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.7.0'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.7.0'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+task extractScriptTemplates {
+    doLast {
+        file("lib/models/config/template-unix.default.txt").text =
+                startScripts.unixStartScriptGenerator.template.asString()
+        file("lib/models/config/template-windows.default.txt").text =
+                startScripts.windowsStartScriptGenerator.template.asString()
+    }
+}
+
+startScripts {
+    unixStartScriptGenerator.template = resources.text.fromFile("lib/models/config/template-unix.txt")
+    windowsStartScriptGenerator.template = resources.text.fromFile("lib/models/config/template-windows.txt")
+}
+
+distributions {
+    main {
+        contents {
+            from("$rootProject.buildDir/lib/") {
+                include "*.dll"
+                include "*.so"
+                into "lib"
+            }
+        }
+    }
+}
