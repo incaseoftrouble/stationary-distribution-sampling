@@ -13,7 +13,11 @@ repositories {
 
 dependencies {
     implementation project('lib:models')
+    implementation files('lib/Jeigen-onefat.jar')
     implementation group: 'it.unimi.dsi', name: 'fastutil', version: '8.5.4'
+    implementation group: 'net.java.dev.jna', name: 'jna', version: '4.1.0'
+
+
 
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.7.0'
     testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.7.0'

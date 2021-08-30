@@ -1,17 +1,9 @@
 dtmc
 
-const int steps;
 const double p;
+const int steps;
 const int levels;
 const int loops;
-
-module loop
-  loop : [1 .. loops] init 1;
-
-  [step] true -> 1 : true;
-  [loop] loop < loops -> (1/2) : (loop'=loop+1) + (1/2) : (loop'=loop);
-  [loop] loop = loops -> 1 : (loop'=1);
-endmodule
 
 module level
   level : [1 .. levels] init 1;
@@ -29,4 +21,12 @@ module step
 
   [step] step < steps -> 1 : (step' = step+1);
   [loop] step = steps -> 1 : true;
+endmodule
+
+module loop
+  loop : [1 .. loops] init 1;
+
+  [step] true -> 1 : true;
+  [loop] loop < loops -> (1/2) : (loop'=loop+1) + (1/2) : (loop'=1);
+  [loop] loop = loops -> 1 : (loop'=1);
 endmodule
