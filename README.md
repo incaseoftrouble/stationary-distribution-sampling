@@ -16,5 +16,6 @@
   * `brp`: `models/brp/brp.pm`, `N=100,MAX=100`
   * `crowds`: `models/crowds/crowds.pm`, `TotalRuns=3,CrowdSize=10`
   * `nand`: `models/nand/nand.pm`, `N=10,K=5`
-  * `loop`: 
-  * `branch`: `models/crafted/branch.pm`, `loops=500,steps=100,p=0.001,levels=1000`
+  * `loop`: `models/crafted/loop.pm`, `size=1000` (add `-explicit` to PRISM call)
+  * `branch`: `models/crafted/branch.pm`, `loops=500,steps=100,p=0.008,levels=1000`
+  * 

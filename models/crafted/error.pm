@@ -1,8 +1,8 @@
 dtmc
 
 const double e;
-const int m;
 const double p;
+const int m = 2;
 module loop
   pos : [1 .. 2] init 1;
   x : [1 .. m] init 1;
