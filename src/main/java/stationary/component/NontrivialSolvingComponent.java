@@ -53,7 +53,7 @@ public final class NontrivialSolvingComponent extends NontrivialComponent {
           maximumIndex = i;
         }
       }
-      assert Util.isOne(maximum) : "Expected maximal vector 1, got %5g".formatted(maximum);
+      assert Util.isOne(maximum) : "Expected maximal vector 1, got %.5f".formatted(maximum);
 
       double[] steadyState = eig.vectors.abs().col(maximumIndex).getValues();
       double sum = Util.kahanSum(steadyState);
