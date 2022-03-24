@@ -1,0 +1,9 @@
+model_file,model_consts,model_type,states,time_constr
+phil-nofair3.nm,,MDP,956,0.30983400344848633
+phil-nofair4.nm,,MDP,9440,0.3012118339538574
+phil-nofair5.nm,,MDP,93068,0.33363771438598633
+phil-nofair6.nm,,MDP,917424,0.3733985424041748
+phil-nofair7.nm,,MDP,9043420,0.437131404876709
+phil-nofair8.nm,,MDP,89144512,0.5930559635162354
+phil-nofair9.nm,,MDP,878732012,0.9141268730163574
+phil-nofair10.nm,,MDP,8662001936,1.2875232696533203

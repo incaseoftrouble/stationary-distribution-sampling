@@ -1,7 +1,6 @@
 package stationary.component;
 
-import de.tum.in.naturals.set.NatBitSet;
-import de.tum.in.probmodels.model.Distribution;
+import de.tum.in.probmodels.graph.Component;
 import de.tum.in.probmodels.util.Util;
 import it.unimi.dsi.fastutil.ints.Int2DoubleMap;
 import it.unimi.dsi.fastutil.ints.Int2DoubleOpenHashMap;
@@ -12,7 +11,6 @@ import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.ints.IntHeapPriorityQueue;
 import it.unimi.dsi.fastutil.ints.IntIterator;
 import it.unimi.dsi.fastutil.ints.IntPriorityQueue;
-import java.util.function.IntFunction;
 import stationary.util.Bound;
 import stationary.util.Check;
 
@@ -25,26 +23,26 @@ public final class NontrivialApproximatingComponent extends NontrivialComponent 
   private double lowerBoundCache = 0.0;
   private double precisionGuide = 1.0;
 
-  public NontrivialApproximatingComponent(int index, NatBitSet component, IntFunction<Distribution> successors) {
-    super(index, component, successors);
+  public NontrivialApproximatingComponent(int index, Component component) {
+    super(index, component);
 
     int size = component.size();
 
     iteration = new Int2ObjectOpenHashMap<>(size);
-    component.forEach((int s) -> iteration.put(s, new Int2DoubleOpenHashMap()));
+    component.states().forEach((int s) -> iteration.put(s, new Int2DoubleOpenHashMap()));
 
     frequencyBounds = new Int2ObjectOpenHashMap<>(size);
-    component.forEach((int s) -> frequencyBounds.put(s, Bound.UNKNOWN));
+    component.states().forEach((int s) -> frequencyBounds.put(s, Bound.UNKNOWN));
 
     samplingCounts = new Int2LongLinkedOpenHashMap(size);
-    component.forEach((int s) -> {
+    component.states().forEach((int s) -> {
       int current = s;
       for (int i = 0; i < size; i++) {
-        current = successors.apply(current).sample();
+        current = component.onlyChoice(current).distribution().sample();
       }
       for (int i = 0; i < size; i++) {
-        current = successors.apply(current).sample();
-        samplingCounts.mergeLong(current, 1, Long::sum);
+        current = component.onlyChoice(current).distribution().sample();
+        samplingCounts.mergeLong(current, 1L, Long::sum);
       }
     });
 
@@ -56,7 +54,7 @@ public final class NontrivialApproximatingComponent extends NontrivialComponent 
       }
       return aError < bError ? 1 : -1;
     });
-    component.forEach(queue::enqueue);
+    component.states().forEach(queue::enqueue);
   }
 
   private double stateErrorBound(int s) {
@@ -67,7 +65,7 @@ public final class NontrivialApproximatingComponent extends NontrivialComponent 
 
   @Override
   protected void doUpdate(int initialState) {
-    int size = states.size();
+    int size = component.size();
 
     for (int i = 0; i < 10; i++) {
       if (queue.isEmpty()) {
@@ -86,11 +84,11 @@ public final class NontrivialApproximatingComponent extends NontrivialComponent 
         double minimalDifference = Double.MAX_VALUE;
         double maximalDifference = Double.MIN_VALUE;
 
-        IntIterator iterator = states.iterator();
+        IntIterator iterator = component.states().iterator();
         while (iterator.hasNext()) {
           int t = iterator.nextInt();
 
-          double value = successors.apply(t).sumWeighted(current);
+          double value = component.onlyChoice(t).distribution().sumWeighted(current);
           if (s == t) {
             value += 1.0;
           }
@@ -154,7 +152,9 @@ public final class NontrivialApproximatingComponent extends NontrivialComponent 
 
   @Override
   public Bound frequency(int state) {
-    assert Check.checkFrequency(states, s -> frequencyBounds.get(s).lower(), successors, error());
+    assert Check.checkFrequency(component.states(),
+        s -> frequencyBounds.get(s).lower(),
+        s -> component.onlyChoice(s).distribution(), error());
     return frequencyBounds.get(state);
   }
 }

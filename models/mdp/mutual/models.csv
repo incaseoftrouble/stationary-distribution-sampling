@@ -1,0 +1,6 @@
+model_file,model_consts,model_type,states,time_constr
+mutual3.nm,,MDP,2368,0.3010549545288086
+mutual4.nm,,MDP,27600,0.3288712501525879
+mutual5.nm,,MDP,308800,0.38970232009887695
+mutual8.nm,,MDP,390068480,0.660696268081665
+mutual10.nm,,MDP,44021283840,1.1289446353912354

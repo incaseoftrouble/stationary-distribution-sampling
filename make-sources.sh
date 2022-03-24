@@ -5,6 +5,7 @@ IFS=$'\n\t'
 
 rm -f sources.tar.gz
 tar -czf sources.tar.gz \
+  run.py eval.py \
   src/main/java \
   lib/models/src/main/java \
   lib/models/config/template-*.txt \
