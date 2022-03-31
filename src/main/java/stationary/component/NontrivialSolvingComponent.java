@@ -1,13 +1,12 @@
 package stationary.component;
 
 import de.tum.in.naturals.Indices;
-import de.tum.in.naturals.set.NatBitSet;
-import de.tum.in.probmodels.model.Distribution;
+import de.tum.in.probmodels.graph.Component;
+import de.tum.in.probmodels.model.distribution.Distribution;
 import de.tum.in.probmodels.util.Util;
 import it.unimi.dsi.fastutil.ints.Int2DoubleMap;
 import it.unimi.dsi.fastutil.ints.Int2DoubleOpenHashMap;
 import it.unimi.dsi.fastutil.ints.IntIterator;
-import java.util.function.IntFunction;
 import java.util.function.IntUnaryOperator;
 import jeigen.DenseMatrix;
 import stationary.util.Bound;
@@ -18,8 +17,8 @@ public final class NontrivialSolvingComponent extends NontrivialComponent {
 
   private final Int2DoubleMap frequency;
 
-  public NontrivialSolvingComponent(int index, NatBitSet component, IntFunction<Distribution> successors) {
-    super(index, component, successors);
+  public NontrivialSolvingComponent(int index, Component component) {
+    super(index, component);
 
     frequency = new Int2DoubleOpenHashMap(component.size());
   }
@@ -27,15 +26,15 @@ public final class NontrivialSolvingComponent extends NontrivialComponent {
   @Override
   protected void doUpdate(int state) {
     if (frequency.isEmpty()) {
-      int size = states.size();
+      int size = component.size();
       DenseMatrix matrix = new DenseMatrix(size, size);
       {
-        IntUnaryOperator stateToIndexMap = Indices.elementToIndexMap(states);
-        IntIterator iterator = states.iterator();
+        IntUnaryOperator stateToIndexMap = Indices.elementToIndexMap(component.states());
+        IntIterator iterator = component.states().iterator();
         int index = 0;
         while (iterator.hasNext()) {
           int s = iterator.nextInt();
-          Distribution distribution = successors.apply(s);
+          Distribution distribution = component.onlyChoice(s).distribution();
           int sIndex = index;
           distribution.forEach((t, p) -> matrix.set(stateToIndexMap.applyAsInt(t), sIndex, p));
           index += 1;
@@ -58,12 +57,13 @@ public final class NontrivialSolvingComponent extends NontrivialComponent {
       double[] steadyState = eig.vectors.abs().col(maximumIndex).getValues();
       double sum = Util.kahanSum(steadyState);
 
-      IntIterator iterator = states.iterator();
+      IntIterator iterator = component.states().iterator();
       for (int index = 0; index < size; index++) {
         frequency.put(iterator.nextInt(), steadyState[index] / sum);
       }
 
-      assert Check.checkFrequency(states, frequency::get, successors, FREQUENCY_PRECISION_CHECK);
+      assert Check.checkFrequency(component.states(), frequency::get,
+          s -> component.onlyChoice(s).distribution(), FREQUENCY_PRECISION_CHECK);
     }
   }
 

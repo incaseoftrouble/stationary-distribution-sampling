@@ -1,32 +1,27 @@
 package stationary.component;
 
-import de.tum.in.naturals.set.NatBitSet;
-import de.tum.in.probmodels.model.Distribution;
+import de.tum.in.probmodels.graph.Component;
 import it.unimi.dsi.fastutil.ints.IntSet;
 import it.unimi.dsi.fastutil.ints.IntSets;
 import java.time.Duration;
-import java.util.function.IntFunction;
 
 public abstract class NontrivialComponent extends BottomComponent {
-  final NatBitSet states;
-  final IntFunction<Distribution> successors;
-
   private long updateTime = 0L;
+  final Component component;
 
-  public NontrivialComponent(int index, NatBitSet states, IntFunction<Distribution> successors) {
+  public NontrivialComponent(int index, Component component) {
     super(index);
-    this.states = states;
-    this.successors = successors;
+    this.component = component;
   }
 
   @Override
   public IntSet states() {
-    return IntSets.unmodifiable(states);
+    return IntSets.unmodifiable(component.states());
   }
 
   @Override
   public boolean contains(int state) {
-    return states.contains(state);
+    return component.contains(state);
   }
 
   @Override
@@ -40,7 +35,7 @@ public abstract class NontrivialComponent extends BottomComponent {
 
   @Override
   public int size() {
-    return states.size();
+    return component.size();
   }
 
   public Duration updateTime() {
@@ -49,6 +44,6 @@ public abstract class NontrivialComponent extends BottomComponent {
 
   @Override
   public String toString() {
-    return "%s[%d]".formatted(states.size() < 10 ? states.toString() : "<%d>".formatted(states.size()), index);
+    return "%s[%d]".formatted(component.size() < 10 ? component.states().toString() : "<%d>".formatted(component.size()), index);
   }
 }

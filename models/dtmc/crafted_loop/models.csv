@@ -1,0 +1,2 @@
+model_file,model_consts,model_type,states,time_constr
+loop.pm,size=1000,DTMC,1000,0.35275936126708984

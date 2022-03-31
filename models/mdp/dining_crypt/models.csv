@@ -1,0 +1,10 @@
+model_file,model_consts,model_type,states,time_constr
+dining_crypt3.nm,,MDP,380,0.31145739555358887
+dining_crypt4.nm,,MDP,2165,0.3084139823913574
+dining_crypt5.nm,,MDP,11850,0.309161901473999
+dining_crypt6.nm,,MDP,63063,0.31733226776123047
+dining_crypt7.nm,,MDP,328760,0.324246883392334
+dining_crypt8.nm,,MDP,1687113,0.3491392135620117
+dining_crypt9.nm,,MDP,8550950,0.3659634590148926
+dining_crypt10.nm,,MDP,42906171,0.3907442092895508
+dining_crypt15.nm,,MDP,123256716400,0.9702975749969482

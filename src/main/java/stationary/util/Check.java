@@ -1,6 +1,6 @@
 package stationary.util;
 
-import de.tum.in.probmodels.model.Distribution;
+import de.tum.in.probmodels.model.distribution.Distribution;
 import de.tum.in.probmodels.util.Util;
 import it.unimi.dsi.fastutil.ints.Int2DoubleMap;
 import it.unimi.dsi.fastutil.ints.Int2DoubleOpenHashMap;

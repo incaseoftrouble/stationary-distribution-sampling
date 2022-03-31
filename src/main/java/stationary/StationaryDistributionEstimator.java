@@ -1,13 +1,14 @@
 package stationary;
 
-import de.tum.in.naturals.set.NatBitSet;
-import de.tum.in.naturals.set.NatBitSets;
+import de.tum.in.naturals.map.Nat2ObjectDenseArrayMap;
 import de.tum.in.probmodels.SelfLoopHandling;
 import de.tum.in.probmodels.explorer.DefaultExplorer;
-import de.tum.in.probmodels.generator.DtmcGenerator;
+import de.tum.in.probmodels.generator.Generator;
+import de.tum.in.probmodels.graph.BsccComponentAnalyser;
+import de.tum.in.probmodels.graph.Component;
 import de.tum.in.probmodels.graph.SccDecomposition;
-import de.tum.in.probmodels.model.Distribution;
-import de.tum.in.probmodels.model.MarkovChain;
+import de.tum.in.probmodels.model.distribution.Distribution;
+import de.tum.in.probmodels.model.impl.DenseDeterministicStochasticSystem;
 import de.tum.in.probmodels.util.Sample;
 import de.tum.in.probmodels.util.Util;
 import de.tum.in.probmodels.util.Util.KahanSum;
@@ -32,30 +33,32 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import parser.State;
-import prism.PrismException;
 import stationary.component.AbsorbingComponent;
 import stationary.component.BottomComponent;
 import stationary.component.NontrivialApproximatingComponent;
+import stationary.component.NontrivialSolvingComponent;
 import stationary.util.Bound;
-import stationary.util.Explore;
 import stationary.util.FrequencyRecord;
 
 public final class StationaryDistributionEstimator {
   private record SamplingTarget(double weight, BottomComponent component, Distribution.WeightFunction weights) {}
 
+
   private static final Logger logger = Logger.getLogger(StationaryDistributionEstimator.class.getName());
   private static final int MAX_EXPLORES_PER_SAMPLE = 10;
 
   private final double precision;
-  private final MarkovChain model;
   private final Mode mode;
 
-  private final DefaultExplorer<State, MarkovChain> explorer;
+  private final DenseDeterministicStochasticSystem model;
+  private final DefaultExplorer<State, DenseDeterministicStochasticSystem> explorer;
   private final List<BottomComponent> components = new ArrayList<>();
   private final IntSet newStatesSinceComponentSearch = new IntOpenHashSet();
   private final Int2ObjectMap<BottomComponent> statesInBottomComponents = new Int2ObjectOpenHashMap<>();
-  private final Int2ObjectMap<Int2ObjectMap<Bound>> componentReachability = new Int2ObjectOpenHashMap<>();
+  // private final Int2ObjectMap<Int2ObjectMap<Bound>> componentReachability = new Int2ObjectOpenHashMap<>();
+  private final Int2ObjectMap<Int2ObjectMap<Bound>> componentReachability = new Nat2ObjectDenseArrayMap<>(128);
   private final Int2DoubleMap exitProbability = new Int2DoubleOpenHashMap();
+  private final BsccComponentAnalyser analyser = new BsccComponentAnalyser();
 
   private int loopCount = 0;
   private int loopStopsUntilCollapse;
@@ -67,14 +70,18 @@ public final class StationaryDistributionEstimator {
   private long lastProgressUpdateLoopCount = 0L;
   private long abortedSamples = 0L;
   private final boolean preExplore;
+  private final boolean solveComponents;
 
-  public StationaryDistributionEstimator(DtmcGenerator generator, double precision, Mode mode, boolean preExplore) {
+  public StationaryDistributionEstimator(Generator<State> generator, double precision, Mode mode,
+      boolean preExplore, boolean solveComponents) {
     this.precision = precision;
     this.mode = mode;
-    this.model = new MarkovChain();
     this.preExplore = preExplore;
+    this.solveComponents = solveComponents;
 
+    DenseDeterministicStochasticSystem model = new DenseDeterministicStochasticSystem();
     this.explorer = DefaultExplorer.of(model, generator, SelfLoopHandling.KEEP);
+    this.model = model;
     loopStopsUntilCollapse = 10;
 
     // Fail-fast if these are accessed for a non-transient state
@@ -85,22 +92,19 @@ public final class StationaryDistributionEstimator {
     return explorer.getState(s);
   }
 
-  private void preExplore() throws PrismException {
-    int initialState = model.getFirstInitialState();
-    Explore.explore(explorer, initialState);
-    model.findDeadlocks(true);
+  private void preExplore() {
+    explorer.exploreReachable();
 
-    List<NatBitSet> components = SccDecomposition.computeSccs(this.model::getSuccessors, IntSet.of(initialState), s -> true, false)
-        .stream().filter(component -> SccDecomposition.isBscc(this.model::getSuccessors, component)).toList();
+    var components = analyser.findComponents(model);
     if (logger.isLoggable(Level.FINE)) {
       logger.log(Level.FINE, String.format("Found %d BSCCs with %d states",
-          components.size(), components.stream().mapToInt(NatBitSet::size).sum()));
+          components.size(), components.stream().mapToInt(Component::size).sum()));
     }
     components.forEach(this::createComponent);
   }
 
-  public Int2ObjectMap<FrequencyRecord> solve() throws PrismException {
-    int initialState = model.getFirstInitialState();
+  public Int2ObjectMap<FrequencyRecord> solve() {
+    int initialState = model.onlyInitialState();
     lastProgressUpdate = System.currentTimeMillis();
     newStatesSinceComponentSearch.add(initialState);
 
@@ -113,7 +117,7 @@ public final class StationaryDistributionEstimator {
       if (initialComponent == null) {
         sample(initialState);
       } else {
-        computedComponentUpdates += 1;
+        computedComponentUpdates += 1L;
         initialComponent.countVisit();
         initialComponent.update(initialState);
       }
@@ -146,7 +150,7 @@ public final class StationaryDistributionEstimator {
       this.lastProgressUpdate = now;
       this.lastProgressUpdateLoopCount = mainLoopCount;
 
-      int initialState = model.getFirstInitialState();
+      int initialState = model.onlyInitialState();
 
       String boundsString;
       if (components.isEmpty()) {
@@ -295,18 +299,24 @@ public final class StationaryDistributionEstimator {
     // reachability.put(component.index, Bound.of(bound.lower(), Math.min(bound.upper(), oldBound.upper())));
   }
 
-  private BottomComponent createComponent(NatBitSet states) {
-    assert states.intStream().noneMatch(statesInBottomComponents::containsKey) : "States %s already in component".formatted(states);
-    assert SccDecomposition.isBscc(this.model::getSuccessors, states);
+  private BottomComponent createComponent(Component component) {
+    assert component.stateStream().noneMatch(statesInBottomComponents::containsKey) : "States %s already in component".formatted(component);
+    assert SccDecomposition.isBscc(this.model::successorsIterator, component.states());
     int index = components.size();
-    BottomComponent component = states.size() == 1
-        ? new AbsorbingComponent(index, states.firstInt())
-        : new NontrivialApproximatingComponent(index, states, model::getTransitions);
-    states.forEach((IntConsumer) state -> statesInBottomComponents.put(state, component));
-    components.add(component);
-    exitProbability.keySet().removeAll(states);
-    componentReachability.keySet().removeAll(states);
-    return component;
+    BottomComponent wrapper;
+    if (component.size() == 1) {
+      wrapper = new AbsorbingComponent(index, component.states().iterator().nextInt());
+    } else {
+      wrapper = solveComponents
+          ? new NontrivialSolvingComponent(index, component)
+          : new NontrivialApproximatingComponent(index, component);
+    }
+    component.states().forEach((IntConsumer) state -> statesInBottomComponents.put(state, wrapper));
+    components.add(wrapper);
+    exitProbability.keySet().removeAll(component.states());
+    component.stateStream().forEach(componentReachability::remove);
+    // componentReachability.keySet().removeAll(component.states());
+    return wrapper;
   }
 
   private void sample(int initialState) {
@@ -320,7 +330,8 @@ public final class StationaryDistributionEstimator {
       double exitProbability = getExitProbabilityUpperBound(initialState);
       for (BottomComponent component : components) {
         Bound reachabilityBounds = getComponentReachabilityBounds(component, initialState);
-        if (component.error() > 0.0) {
+        double updateScore = reachabilityBounds.upper() * component.error();
+        if (updateScore > 0.0) {
           samplingTargets.add(new SamplingTarget(reachabilityBounds.upper() * component.error(), component,
               (s, p) -> p * getComponentReachabilityUpperBound(component, s)));
         }
@@ -332,6 +343,8 @@ public final class StationaryDistributionEstimator {
       }
       samplingTargets.add(new SamplingTarget(exitProbability, null, (s, p) -> p * getExitProbabilityUpperBound(s)));
       SamplingTarget target = Sample.sampleWeighted(samplingTargets, SamplingTarget::weight).orElseThrow();
+      assert samplingTargets.stream().mapToDouble(SamplingTarget::weight).max().orElseThrow() > precision :
+          samplingTargets.stream().mapToDouble(SamplingTarget::weight).toString();
       if (target.component() != null) {
         updateComponentReachability.add(target.component());
       }
@@ -368,21 +381,15 @@ public final class StationaryDistributionEstimator {
       visitStack.push(currentState);
 
       // Sample the successor
-      Distribution transitions = model.getTransitions(currentState);
-      if (transitions == null || transitions.isEmpty()) { // Deadlock state
-        updateComponentReachability.add(createComponent(NatBitSets.singleton(currentState)));
-        visitedStateSet.remove(currentState);
-        newStatesSinceComponentSearch.remove(currentState);
-        break;
-      }
+      Distribution transitions = model.choice(currentState).distribution();
 
       int nextState = transitions.sampleWeightedFiltered(samplingWeight, s -> !visitedStateSet.contains(s));
       if (nextState == -1) {
         checkForComponents = true;
-        abortedSamples += 1;
+        abortedSamples += 1L;
         break;
       }
-      assert !visitedStateSet.contains(nextState);
+      assert !visitedStateSet.contains(nextState) : transitions;
 
       sampledStatesCount += 1L;
       if (!explorer.isExploredState(nextState)) {
@@ -404,17 +411,24 @@ public final class StationaryDistributionEstimator {
 
         if (!newStatesSinceComponentSearch.isEmpty()) {
           assert newStatesSinceComponentSearch.intStream().noneMatch(this.statesInBottomComponents::containsKey);
-          List<NatBitSet> components = SccDecomposition.computeSccs(this.model::getSuccessors, newStatesSinceComponentSearch,
-                  s -> this.explorer.isExploredState(s) && !statesInBottomComponents.containsKey(s), false)
-              .stream().filter(component -> SccDecomposition.isBscc(this.model::getSuccessors, component)).toList();
+
+          List<Component> bsccs = new ArrayList<>();
+          SccDecomposition.computeSccs(model::successorsIterator, newStatesSinceComponentSearch,
+              s -> this.explorer.isExploredState(s) && !statesInBottomComponents.containsKey(s), false,
+              scc -> {
+                if (SccDecomposition.isBscc(model::successorsIterator, scc)) {
+                  bsccs.add(analyser.makeCanonicalComponent(model, scc));
+                }
+                return true;
+              });
           newStatesSinceComponentSearch.clear();
           if (logger.isLoggable(Level.FINE)) {
             logger.log(Level.FINE, String.format("Found %d BSCCs with %d states",
-                components.size(), components.stream().mapToInt(NatBitSet::size).sum()));
+                bsccs.size(), bsccs.stream().mapToInt(Component::size).sum()));
           }
-          for (NatBitSet component : components) {
+          for (Component component : bsccs) {
             createComponent(component);
-            visitedStateSet.removeAll(component);
+            visitedStateSet.removeAll(component.states());
           }
         }
         loopStopsUntilCollapse = explorer.exploredStates().size();
@@ -430,14 +444,14 @@ public final class StationaryDistributionEstimator {
         continue;
       }
       assert !statesInBottomComponents.containsKey(state);
-      Distribution transitions = model.getTransitions(state);
+      Distribution transitions = model.choice(state).distribution();
 
       if (updateExitProbability) {
         double exitProbability = transitions.sumWeightedExceptJacobi(this::getExitProbabilityUpperBound, state);
         if (Double.isNaN(exitProbability) || Util.isOne(exitProbability)) {
           updateExitProbability = false;
         } else {
-          assert Util.lessOrEqual(0.0, exitProbability);
+          assert Util.lessOrEqual(0.0, exitProbability) : exitProbability;
           double previous = this.exitProbability.put(state, exitProbability);
           assert Double.isNaN(previous) || Util.lessOrEqual(exitProbability, previous) :
               "Updating exit bound of %d from %.5g to %.5g".formatted(state, previous, exitProbability);

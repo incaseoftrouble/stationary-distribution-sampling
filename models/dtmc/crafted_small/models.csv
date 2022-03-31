@@ -1,0 +1,2 @@
+model_file,model_consts,model_type,states,time_constr
+small.pm,"N=100,p=0.1",DTMC,100,0.2948477268218994
