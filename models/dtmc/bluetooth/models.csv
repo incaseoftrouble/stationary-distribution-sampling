@@ -1,2 +1,2 @@
 model_file,model_consts,model_type,states,time_constr
-"bluetooth.pm","mrec=1",DTMC,3411945339,30.452
+bluetooth.pm,mrec=1,DTMC,3411945339,30.452

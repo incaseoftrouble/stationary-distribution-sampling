@@ -1,17 +1,18 @@
 package stationary;
 
 import de.tum.in.naturals.map.Nat2ObjectDenseArrayMap;
-import de.tum.in.probmodels.SelfLoopHandling;
 import de.tum.in.probmodels.explorer.DefaultExplorer;
+import de.tum.in.probmodels.explorer.SelfLoopHandling;
 import de.tum.in.probmodels.generator.Generator;
-import de.tum.in.probmodels.graph.BsccComponentAnalyser;
 import de.tum.in.probmodels.graph.Component;
 import de.tum.in.probmodels.graph.SccDecomposition;
+import de.tum.in.probmodels.model.MutableDenseSystem;
 import de.tum.in.probmodels.model.distribution.Distribution;
-import de.tum.in.probmodels.model.impl.DenseDeterministicStochasticSystem;
+import de.tum.in.probmodels.model.impl.DynamicQuotient;
 import de.tum.in.probmodels.util.Sample;
 import de.tum.in.probmodels.util.Util;
 import de.tum.in.probmodels.util.Util.KahanSum;
+import de.tum.in.probmodels.values.Bounds;
 import it.unimi.dsi.fastutil.ints.Int2DoubleMap;
 import it.unimi.dsi.fastutil.ints.Int2DoubleOpenHashMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
@@ -22,27 +23,35 @@ import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.ints.IntSet;
 import it.unimi.dsi.fastutil.ints.IntStack;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
 import java.util.function.IntConsumer;
+import java.util.function.IntFunction;
+import java.util.function.IntToDoubleFunction;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
+import javax.annotation.Nullable;
 import parser.State;
 import stationary.component.AbsorbingComponent;
 import stationary.component.BottomComponent;
 import stationary.component.NontrivialApproximatingComponent;
+import stationary.component.NontrivialApproximationSolvingComponent;
 import stationary.component.NontrivialSolvingComponent;
-import stationary.util.Bound;
 import stationary.util.FrequencyRecord;
 
 public final class StationaryDistributionEstimator {
-  private record SamplingTarget(double weight, BottomComponent component, Distribution.WeightFunction weights) {}
+  private enum ComponentMode {
+    APPROXIMATION, SOLVING, FULL_APPROXIMATION_REACH, FULL_APPROXIMATION
+  }
 
+  private record SamplingTarget(double weight, @Nullable BottomComponent component, Distribution.WeightFunction weights) {}
 
   private static final Logger logger = Logger.getLogger(StationaryDistributionEstimator.class.getName());
   private static final int MAX_EXPLORES_PER_SAMPLE = 10;
@@ -50,15 +59,15 @@ public final class StationaryDistributionEstimator {
   private final double precision;
   private final Mode mode;
 
-  private final DenseDeterministicStochasticSystem model;
-  private final DefaultExplorer<State, DenseDeterministicStochasticSystem> explorer;
+  private final DefaultExplorer<State, MutableDenseSystem> explorer;
+  private final DynamicQuotient<MutableDenseSystem> quotient;
+  private final int initialState;
   private final List<BottomComponent> components = new ArrayList<>();
   private final IntSet newStatesSinceComponentSearch = new IntOpenHashSet();
-  private final Int2ObjectMap<BottomComponent> statesInBottomComponents = new Int2ObjectOpenHashMap<>();
+  private final Int2ObjectMap<BottomComponent> statesInBottomComponents = new Nat2ObjectDenseArrayMap<>(1024);
   // private final Int2ObjectMap<Int2ObjectMap<Bound>> componentReachability = new Int2ObjectOpenHashMap<>();
-  private final Int2ObjectMap<Int2ObjectMap<Bound>> componentReachability = new Nat2ObjectDenseArrayMap<>(128);
+  private final List<Int2ObjectMap<Bounds>> componentStateReachability = new ArrayList<>();
   private final Int2DoubleMap exitProbability = new Int2DoubleOpenHashMap();
-  private final BsccComponentAnalyser analyser = new BsccComponentAnalyser();
 
   private int loopCount = 0;
   private int loopStopsUntilCollapse;
@@ -70,22 +79,22 @@ public final class StationaryDistributionEstimator {
   private long lastProgressUpdateLoopCount = 0L;
   private long abortedSamples = 0L;
   private final boolean preExplore;
-  private final boolean solveComponents;
+  private ComponentMode componentMode;
 
   public StationaryDistributionEstimator(Generator<State> generator, double precision, Mode mode,
       boolean preExplore, boolean solveComponents) {
     this.precision = precision;
     this.mode = mode;
     this.preExplore = preExplore;
-    this.solveComponents = solveComponents;
+    this.componentMode = solveComponents ? ComponentMode.SOLVING : ComponentMode.APPROXIMATION;
 
-    DenseDeterministicStochasticSystem model = new DenseDeterministicStochasticSystem();
-    this.explorer = DefaultExplorer.of(model, generator, SelfLoopHandling.KEEP);
-    this.model = model;
+    this.explorer = DefaultExplorer.of(generator, SelfLoopHandling.KEEP);
+    initialState = explorer.onlyInitialStateId();
     loopStopsUntilCollapse = 10;
 
     // Fail-fast if these are accessed for a non-transient state
     exitProbability.defaultReturnValue(Double.NaN);
+    quotient = new DynamicQuotient<>(explorer.partialSystem(), SelfLoopHandling.INLINE);
   }
 
   public State getState(int s) {
@@ -93,20 +102,29 @@ public final class StationaryDistributionEstimator {
   }
 
   private void preExplore() {
-    explorer.exploreReachable();
+    explorer.exploreReachable(explorer.initialStateIds());
+    var components = quotient.updateComponents(explorer.initialStateIds(), s -> true);
 
-    var components = analyser.findComponents(model);
     if (logger.isLoggable(Level.FINE)) {
       logger.log(Level.FINE, String.format("Found %d BSCCs with %d states",
-          components.size(), components.stream().mapToInt(Component::size).sum()));
+          components.size(), components.values().stream().mapToInt(Component::size).sum()));
     }
-    components.forEach(this::createComponent);
+    if (components.size() == 1) {
+      if (components.get(0).size() == explorer.exploredStateCount()) {
+        logger.log(Level.INFO, "Single SCC model, solving fully");
+        componentMode = ComponentMode.FULL_APPROXIMATION;
+      } else {
+        logger.log(Level.INFO, "Model has a single SCC");
+        componentMode = ComponentMode.FULL_APPROXIMATION_REACH;
+      }
+    }
+
+    components.values().forEach(this::createComponent);
   }
 
   public Int2ObjectMap<FrequencyRecord> solve() {
-    int initialState = model.onlyInitialState();
     lastProgressUpdate = System.currentTimeMillis();
-    newStatesSinceComponentSearch.add(initialState);
+    newStatesSinceComponentSearch.addAll(explorer.initialStateIds());
 
     if (preExplore) {
       preExplore();
@@ -115,9 +133,9 @@ public final class StationaryDistributionEstimator {
       mainLoopCount += 1L;
       BottomComponent initialComponent = statesInBottomComponents.get(initialState);
       if (initialComponent == null) {
-        sample(initialState);
+        sample(quotient.onlyInitialState());
       } else {
-        computedComponentUpdates += 1L;
+        computedComponentUpdates += 1;
         initialComponent.countVisit();
         initialComponent.update(initialState);
       }
@@ -127,14 +145,14 @@ public final class StationaryDistributionEstimator {
 
     Int2ObjectMap<FrequencyRecord> frequency = new Int2ObjectOpenHashMap<>(statesInBottomComponents.size());
     for (BottomComponent component : components) {
-      Bound reachability = getComponentReachabilityBounds(component, initialState);
-      double error = reachability.upper() * component.error();
+      Bounds reachability = getComponentReachabilityBounds(component).apply(initialState);
+      double error = reachability.upperBound() * component.error();
       component.states().intStream().forEach((int s) ->
-          frequency.put(s, new FrequencyRecord(component.frequency(s).lower() * reachability.lower(), error)));
+          frequency.put(s, new FrequencyRecord(component.frequency(s).lowerBound() * reachability.lowerBound(), error)));
     }
 
     assert Util.lessOrEqual((1.0 - getAbsorptionLowerBound(initialState)) + components.stream().mapToDouble(component ->
-        getComponentReachabilityUpperBound(component, initialState) * component.error()).max().orElseThrow(), precision);
+        getComponentReachabilityUpperBound(component).applyAsDouble(initialState) * component.error()).max().orElseThrow(), precision);
 
     return frequency;
   }
@@ -150,7 +168,7 @@ public final class StationaryDistributionEstimator {
       this.lastProgressUpdate = now;
       this.lastProgressUpdateLoopCount = mainLoopCount;
 
-      int initialState = model.onlyInitialState();
+      int initialState = this.initialState;
 
       String boundsString;
       if (components.isEmpty()) {
@@ -158,9 +176,10 @@ public final class StationaryDistributionEstimator {
       } else {
         boundsString = components.stream()
             .sorted(Comparator.comparingDouble(component ->
-                -getComponentReachabilityLowerBound(component, initialState) * component.error()))
+                -getComponentReachabilityLowerBound(component).applyAsDouble(initialState) * component.error()))
             .limit(10L)
-            .map(component -> "%s@[%.5f]".formatted(getComponentReachabilityBounds(component, initialState), component.error()))
+            .map(component -> "%s@[%.5f](%d)".formatted(getComponentReachabilityBounds(component).apply(initialState), component.error(),
+                component.getVisitCount()))
             .collect(Collectors.joining(", "));
         if (components.size() > 10) {
           boundsString += " ... (%d)".formatted(components.size());
@@ -199,32 +218,35 @@ public final class StationaryDistributionEstimator {
     if (statesInBottomComponents.containsKey(state)) {
       return 1.0;
     }
-    Int2ObjectMap<Bound> reachabilityMap = componentReachability.get(state);
-    return reachabilityMap == null ? 0.0 : reachabilityMap.values().stream().mapToDouble(Bound::lower).sum();
+    double bound = 0.0;
+    for (Int2ObjectMap<Bounds> map : componentStateReachability) {
+      bound += map.getOrDefault(state, Bounds.reachUnknown()).lowerBound();
+    }
+    return bound;
   }
 
   private double computeTotalError(int state) {
     double error;
     BottomComponent stateComponent = statesInBottomComponents.get(state);
     if (stateComponent == null) {
-      Int2ObjectMap<Bound> reachabilityMap = componentReachability.get(state);
-      if (reachabilityMap == null) {
-        error = 1.0;
-      } else {
-        KahanSum exploredWeightedError = new KahanSum();
-        KahanSum absorptionProbability = new KahanSum();
-        for (BottomComponent component : components) {
-          double componentError = component.error();
-          Bound bound = reachabilityMap.get(component.index);
-          if (bound != null) {
-            exploredWeightedError.add(componentError * bound.lower());
-            absorptionProbability.add(bound.lower());
+      KahanSum exploredWeightedError = new KahanSum();
+      KahanSum absorptionProbability = new KahanSum();
+      var iterator = componentStateReachability.listIterator();
+      while (iterator.hasNext()) {
+        var component = components.get(iterator.nextIndex());
+        var stateReachability = iterator.next();
+        double componentError = component.error();
+        Bounds bound = stateReachability.get(state);
+        if (bound != null) {
+          if (componentError != 0.0) {
+            exploredWeightedError.add(componentError * bound.lowerBound());
           }
+          absorptionProbability.add(bound.lowerBound());
         }
-        assert Util.lessOrEqual(exploredWeightedError.get(), 1.0) : "Got unexpected error: %s".formatted(exploredWeightedError);
-        assert Util.lessOrEqual(absorptionProbability.get(), 1.0) : "Got unexpected absorption: %s".formatted(absorptionProbability);
-        error = exploredWeightedError.get() + (1.0 - absorptionProbability.get());
       }
+      assert Util.lessOrEqual(exploredWeightedError.get(), 1.0) : "Got unexpected error: %s".formatted(exploredWeightedError);
+      assert Util.lessOrEqual(absorptionProbability.get(), 1.0) : "Got unexpected absorption: %s".formatted(absorptionProbability);
+      error = exploredWeightedError.get() + (1.0 - absorptionProbability.get());
     } else {
       error = stateComponent.error();
     }
@@ -232,90 +254,82 @@ public final class StationaryDistributionEstimator {
     return error;
   }
 
-  private Bound getComponentReachabilityBounds(BottomComponent component, int state) {
-    BottomComponent stateComponent = statesInBottomComponents.get(state);
-    if (stateComponent == null) {
-      return computeComponentReachabilityBoundsTransient(component, state);
-    }
-    return stateComponent.equals(component) ? Bound.ONE : Bound.ZERO;
+  private IntFunction<Bounds> getComponentReachabilityBounds(BottomComponent component) {
+    var reachability = componentStateReachability.get(component.index);
+    return state -> {
+      BottomComponent stateComponent = statesInBottomComponents.get(state);
+      if (stateComponent == null) {
+        return reachability.getOrDefault(state, Bounds.reachUnknown());
+      }
+      return stateComponent.equals(component) ? Bounds.reachOne() : Bounds.reachZero();
+    };
   }
 
-  private Bound computeComponentReachabilityBoundsTransient(BottomComponent component, int state) {
-    assert !statesInBottomComponents.containsKey(state);
-    Int2ObjectMap<Bound> reachability = componentReachability.get(state);
-    return reachability == null ? Bound.UNKNOWN : reachability.getOrDefault(component.index, Bound.UNKNOWN);
-    /* if (reachability == null) {
-      return Bound.UNKNOWN;
+  private void updateFromLowerBounds() {
+    Int2ObjectMap<KahanSum> stateAbsorptionProbabilities = new Nat2ObjectDenseArrayMap<>(explorer.exploredStateCount());
+    for (Int2ObjectMap<Bounds> bounds : componentStateReachability) {
+      for (Int2ObjectMap.Entry<Bounds> entry : bounds.int2ObjectEntrySet()) {
+        stateAbsorptionProbabilities.computeIfAbsent(entry.getIntKey(), k -> new KahanSum()).add(entry.getValue().lowerBound());
+      }
     }
-    Bound bound = reachability.get(component.index);
-    if (bound == null) {
-      return Bound.UNKNOWN;
+
+    for (Int2ObjectMap<Bounds> bounds : componentStateReachability) {
+      for (Int2ObjectMap.Entry<KahanSum> entry : stateAbsorptionProbabilities.int2ObjectEntrySet()) {
+        int state = entry.getIntKey();
+        Bounds currentBounds = bounds.getOrDefault(state, Bounds.reachUnknown());
+        KahanSum stateAbsorption = entry.getValue();
+        double globalUpper = KahanSum.of(1.0, -stateAbsorption.get(), currentBounds.lowerBound());
+        if (currentBounds.upperBound() > globalUpper) {
+          bounds.put(state, currentBounds.withUpper(globalUpper));
+        }
+      }
     }
-    double sum = reachability.values().stream().mapToDouble(Bound::lower).sum();
-    if (bound.upper() > 1 - sum + bound.lower()) {
-      Bound newBound = Bound.of(bound.lower(), 1 - sum + bound.lower());
-      reachability.put(component.index, newBound);
-      return newBound;
-    }
-    return bound; */
   }
 
-  private double getComponentReachabilityLowerBound(BottomComponent component, int state) {
-    BottomComponent stateComponent = statesInBottomComponents.get(state);
-    if (stateComponent == null) {
-      return getComponentReachabilityLowerBoundTransient(component, state);
-    }
-    return stateComponent.equals(component) ? 1.0 : 0.0;
+  private IntToDoubleFunction getComponentReachabilityLowerBound(BottomComponent component) {
+    var bounds = getComponentReachabilityBounds(component);
+    return state -> bounds.apply(state).lowerBound();
   }
 
-  private double getComponentReachabilityLowerBoundTransient(BottomComponent component, int state) {
-    assert !statesInBottomComponents.containsKey(state);
-    return getComponentReachabilityBounds(component, state).lower();
+  private IntToDoubleFunction getComponentReachabilityUpperBound(BottomComponent component) {
+    var bounds = getComponentReachabilityBounds(component);
+    return state -> bounds.apply(state).upperBound();
   }
 
-  private double getComponentReachabilityUpperBound(BottomComponent component, int state) {
-    BottomComponent stateComponent = statesInBottomComponents.get(state);
-    if (stateComponent == null) {
-      return getComponentReachabilityUpperBoundTransient(component, state);
-    }
-    return stateComponent.equals(component) ? 1.0 : 0.0;
-  }
-
-  private double getComponentReachabilityUpperBoundTransient(BottomComponent component, int state) {
-    assert !statesInBottomComponents.containsKey(state);
-    return getComponentReachabilityBounds(component, state).upper();
-  }
-
-  private void updateComponentReachabilityBound(BottomComponent component, int state, Bound bound) {
-    assert !statesInBottomComponents.containsKey(state);
-    if (Util.isZero(bound.lower()) && Util.isOne(bound.upper())) {
-      return;
-    }
-    Int2ObjectMap<Bound> reachability = componentReachability.computeIfAbsent(state, k -> new Int2ObjectOpenHashMap<>());
-    assert reachability.getOrDefault(component.index, Bound.UNKNOWN).contains(bound)
-        : "Updating reachability of %d from %s to %s".formatted(state, reachability.getOrDefault(component.index, Bound.UNKNOWN), bound);
-    reachability.put(component.index, bound);
-    // Bound oldBound = reachability.getOrDefault(component.index, Bound.UNKNOWN);
-    // reachability.put(component.index, Bound.of(bound.lower(), Math.min(bound.upper(), oldBound.upper())));
+  private BiConsumer<Integer, Bounds> updateComponentReachabilityBound(BottomComponent component) {
+    var reachability = componentStateReachability.get(component.index);
+    return (state, bound) -> {
+      assert !statesInBottomComponents.containsKey(state.intValue());
+      reachability.merge(state.intValue(), bound, Bounds::shrink);
+      // reachability.put(state.intValue(), bound);
+      // assert (oldBounds == null ? Bounds.reachUnknown() : oldBounds).contains(bound, Util.WEAK_EPS)
+      //    : "Updating reachability of %d from %s to %s".formatted(state, oldBounds, bound);
+    };
   }
 
   private BottomComponent createComponent(Component component) {
     assert component.stateStream().noneMatch(statesInBottomComponents::containsKey) : "States %s already in component".formatted(component);
-    assert SccDecomposition.isBscc(this.model::successorsIterator, component.states());
+    assert SccDecomposition.isBscc(explorer.partialSystem()::successorsIterator, component.states());
     int index = components.size();
     BottomComponent wrapper;
     if (component.size() == 1) {
       wrapper = new AbsorbingComponent(index, component.states().iterator().nextInt());
     } else {
-      wrapper = solveComponents
-          ? new NontrivialSolvingComponent(index, component)
-          : new NontrivialApproximatingComponent(index, component);
+      wrapper = switch (componentMode) {
+        case APPROXIMATION -> new NontrivialApproximatingComponent(index, component);
+        case SOLVING -> new NontrivialSolvingComponent(index, component);
+        case FULL_APPROXIMATION_REACH -> new NontrivialApproximationSolvingComponent(index, component, precision / 2);
+        case FULL_APPROXIMATION -> new NontrivialApproximationSolvingComponent(index, component, precision);
+      };
     }
+
     component.states().forEach((IntConsumer) state -> statesInBottomComponents.put(state, wrapper));
     components.add(wrapper);
     exitProbability.keySet().removeAll(component.states());
-    component.stateStream().forEach(componentReachability::remove);
-    // componentReachability.keySet().removeAll(component.states());
+    for (Int2ObjectMap<Bounds> bounds : componentStateReachability) {
+      bounds.keySet().removeAll(component.states());
+    }
+    componentStateReachability.add(new Nat2ObjectDenseArrayMap<>(1024));
     return wrapper;
   }
 
@@ -323,26 +337,29 @@ public final class StationaryDistributionEstimator {
     assert !statesInBottomComponents.containsKey(initialState);
 
     Distribution.WeightFunction samplingWeight;
-    Set<BottomComponent> updateComponentReachability = new HashSet<>(2);
+    Set<BottomComponent> updateComponentReachability = new HashSet<>();
 
     if (mode == Mode.SAMPLE_TARGET) {
-      List<SamplingTarget> samplingTargets = new ArrayList<>(2 * components.size());
+      List<SamplingTarget> samplingTargets = new ArrayList<>(1 + components.size());
+
       double exitProbability = getExitProbabilityUpperBound(initialState);
+      samplingTargets.add(new SamplingTarget(exitProbability, null, (s, p) -> p * getExitProbabilityUpperBound(s)));
+
       for (BottomComponent component : components) {
-        Bound reachabilityBounds = getComponentReachabilityBounds(component, initialState);
-        double updateScore = reachabilityBounds.upper() * component.error();
-        if (updateScore > 0.0) {
-          samplingTargets.add(new SamplingTarget(reachabilityBounds.upper() * component.error(), component,
-              (s, p) -> p * getComponentReachabilityUpperBound(component, s)));
+        var componentBounds = getComponentReachabilityBounds(component);
+        Bounds reachabilityBounds = componentBounds.apply(initialState);
+        double score = reachabilityBounds.upperBound() * component.error() + reachabilityBounds.difference();
+        if (!Util.isZero(score)) {
+          samplingTargets.add(new SamplingTarget(score, component, (s, p) -> p * componentBounds.apply(s).upperBound()));
         }
-        double reachabilityScore = reachabilityBounds.difference();
-        if (reachabilityScore > 0.0) {
-          samplingTargets.add(new SamplingTarget(reachabilityScore, component,
-              (s, p) -> p * getComponentReachabilityBounds(component, s).difference()));
+
+        // Heuristic
+        if (Sample.random.nextDouble() * reachabilityBounds.difference() > precision) {
+          updateComponentReachability.add(component);
         }
       }
-      samplingTargets.add(new SamplingTarget(exitProbability, null, (s, p) -> p * getExitProbabilityUpperBound(s)));
       SamplingTarget target = Sample.sampleWeighted(samplingTargets, SamplingTarget::weight).orElseThrow();
+
       assert samplingTargets.stream().mapToDouble(SamplingTarget::weight).max().orElseThrow() > precision :
           samplingTargets.stream().mapToDouble(SamplingTarget::weight).toString();
       if (target.component() != null) {
@@ -371,7 +388,9 @@ public final class StationaryDistributionEstimator {
       if (component != null) {
         updateComponentReachability.add(component);
         computedComponentUpdates += 1L;
-        component.update(currentState);
+        if (!Util.isZero(component.error())) {
+          component.update(currentState);
+        }
         component.countVisit();
         break;
       }
@@ -381,12 +400,12 @@ public final class StationaryDistributionEstimator {
       visitStack.push(currentState);
 
       // Sample the successor
-      Distribution transitions = model.choice(currentState).distribution();
+      Distribution transitions = quotient.onlyDistribution(currentState);
 
-      int nextState = transitions.sampleWeightedFiltered(samplingWeight, s -> !visitedStateSet.contains(s));
+      int nextState = transitions.sampleWeightedExcept(samplingWeight, visitedStateSet::contains);
       if (nextState == -1) {
         checkForComponents = true;
-        abortedSamples += 1L;
+        abortedSamples += 1;
         break;
       }
       assert !visitedStateSet.contains(nextState) : transitions;
@@ -404,31 +423,39 @@ public final class StationaryDistributionEstimator {
       currentState = nextState;
     }
 
-    if (checkForComponents) {
+    if (!preExplore && checkForComponents) {
       loopCount += 1;
       if (loopCount > loopStopsUntilCollapse) {
         loopCount = 0;
 
         if (!newStatesSinceComponentSearch.isEmpty()) {
           assert newStatesSinceComponentSearch.intStream().noneMatch(this.statesInBottomComponents::containsKey);
-
-          List<Component> bsccs = new ArrayList<>();
-          SccDecomposition.computeSccs(model::successorsIterator, newStatesSinceComponentSearch,
-              s -> this.explorer.isExploredState(s) && !statesInBottomComponents.containsKey(s), false,
-              scc -> {
-                if (SccDecomposition.isBscc(model::successorsIterator, scc)) {
-                  bsccs.add(analyser.makeCanonicalComponent(model, scc));
-                }
-                return true;
-              });
+          var components = quotient.updateComponents(quotient.initialStates(), explorer::isExploredState);
           newStatesSinceComponentSearch.clear();
+
           if (logger.isLoggable(Level.FINE)) {
             logger.log(Level.FINE, String.format("Found %d BSCCs with %d states",
-                bsccs.size(), bsccs.stream().mapToInt(Component::size).sum()));
+                components.size(), components.values().stream().mapToInt(Component::size).sum()));
           }
-          for (Component component : bsccs) {
-            createComponent(component);
+
+          Int2ObjectMap<KahanSum> stateAbsorptionProbabilities = new Int2ObjectOpenHashMap<>(explorer.exploredStateCount());
+          for (Int2ObjectMap<Bounds> bounds : componentStateReachability) {
+            for (Int2ObjectMap.Entry<Bounds> entry : bounds.int2ObjectEntrySet()) {
+              double lowerBound = entry.getValue().lowerBound();
+              if (lowerBound > 0.0) {
+                stateAbsorptionProbabilities.computeIfAbsent(entry.getIntKey(), k -> new KahanSum()).add(lowerBound);
+              }
+            }
+          }
+
+          for (Component component : components.values()) {
+            BottomComponent bottomComponent = createComponent(component);
             visitedStateSet.removeAll(component.states());
+
+            var componentBounds = componentStateReachability.get(bottomComponent.index);
+            for (Int2ObjectMap.Entry<KahanSum> entry : stateAbsorptionProbabilities.int2ObjectEntrySet()) {
+              componentBounds.put(entry.getIntKey(), Bounds.reach(0.0, KahanSum.of(1.0, -entry.getValue().get())));
+            }
           }
         }
         loopStopsUntilCollapse = explorer.exploredStates().size();
@@ -437,18 +464,25 @@ public final class StationaryDistributionEstimator {
 
     // Propagate values backwards along the path
     boolean updateExitProbability = !preExplore;
-    while (!visitStack.isEmpty() && (updateExitProbability || !updateComponentReachability.isEmpty())) {
+    Collection<ComponentUpdate> componentReachabilityUpdates = new ArrayList<>(updateComponentReachability.size());
+    for (BottomComponent component : updateComponentReachability) {
+      componentReachabilityUpdates.add(new ComponentUpdate(component,
+          getComponentReachabilityBounds(component),
+          updateComponentReachabilityBound(component)));
+    }
+
+    while (!visitStack.isEmpty() && (updateExitProbability || !componentReachabilityUpdates.isEmpty())) {
       int state = visitStack.popInt();
 
       if (!visitedStateSet.contains(state)) {
         continue;
       }
       assert !statesInBottomComponents.containsKey(state);
-      Distribution transitions = model.choice(state).distribution();
+      Distribution transitions = quotient.onlyDistribution(state);
 
       if (updateExitProbability) {
-        double exitProbability = transitions.sumWeightedExceptJacobi(this::getExitProbabilityUpperBound, state);
-        if (Double.isNaN(exitProbability) || Util.isOne(exitProbability)) {
+        double exitProbability = transitions.sumWeighted(this::getExitProbabilityUpperBound);
+        if (Util.isOne(exitProbability)) {
           updateExitProbability = false;
         } else {
           assert Util.lessOrEqual(0.0, exitProbability) : exitProbability;
@@ -458,20 +492,17 @@ public final class StationaryDistributionEstimator {
         }
       }
 
-      if (!updateComponentReachability.isEmpty()) {
-        Iterator<BottomComponent> iterator = updateComponentReachability.iterator();
-        while (iterator.hasNext()) {
-          computedTransientUpdates += 1L;
+      Iterator<ComponentUpdate> iterator = componentReachabilityUpdates.iterator();
+      while (iterator.hasNext()) {
+        computedTransientUpdates += 1L;
 
-          BottomComponent component = iterator.next();
-          double lowerBound = transitions.sumWeightedExceptJacobi(s -> getComponentReachabilityLowerBound(component, s), state);
-          double upperBound = transitions.sumWeightedExceptJacobi(s -> getComponentReachabilityUpperBound(component, s), state);
-          assert Double.isNaN(lowerBound) == Double.isNaN(upperBound);
-          if (Double.isNaN(lowerBound) || (Util.isZero(lowerBound) && Util.isOne(upperBound))) {
-            iterator.remove();
-          } else {
-            updateComponentReachabilityBound(component, state, Bound.of(lowerBound, upperBound));
-          }
+        ComponentUpdate component = iterator.next();
+        Bounds bounds = transitions.sumWeightedBounds(component.reachabilityBounds);
+        assert !bounds.isNaN();
+        if (bounds.equalsUpTo(Bounds.reachUnknown())) {
+          iterator.remove();
+        } else {
+          component.updateFunction.accept(state, bounds);
         }
       }
     }
@@ -480,4 +511,7 @@ public final class StationaryDistributionEstimator {
   public enum Mode {
     SAMPLE_NAIVE, SAMPLE_TARGET
   }
+
+  private record ComponentUpdate(BottomComponent component, IntFunction<Bounds> reachabilityBounds,
+                                 BiConsumer<Integer, Bounds> updateFunction) {}
 }

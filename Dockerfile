@@ -16,18 +16,19 @@ COPY --from=prism /opt/prism /opt/lib/models/lib/prism/
 RUN cd /opt \
     && tar -xf sources.tar.gz \
     && rm -f /opt/sources.tar.gz \
-    && gradle distTar --no-daemon
+    && gradle distTar --no-daemon -Pskip-prism-make
 
 
 FROM debian:bullseye
 
 WORKDIR /opt
-RUN apt-get update && apt-get install -y openjdk-17-jre-headless time \
+RUN apt-get update && apt-get install -y openjdk-17-jre-headless python3 time \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=prism /opt/prism /opt/prism
 COPY --from=gradle /opt/build/distributions/stationary-distribution-sampling-0.1.tar /opt/sds/
 COPY --from=gradle /opt/models /opt/models
+COPY --from=gradle /opt/run.py /opt/eval.py /opt/
 
 RUN cd /opt/sds && tar -xf stationary-distribution-sampling-0.1.tar --strip-components=1 \
     && rm stationary-distribution-sampling-0.1.tar \

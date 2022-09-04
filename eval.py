@@ -1,27 +1,52 @@
 import json
+import pathlib
 import sys
 from collections import defaultdict
+import argparse
 
 import tabulate
 
 if __name__ == "__main__":
-    with open(sys.argv[1]) as f:
+    parser = argparse.ArgumentParser(description="Evaluate results")
+
+    parser.add_argument('data', help="Results file", type=pathlib.Path)
+    parser.add_argument("--only", help="Filter by type (single_scc, one_state_scc)")
+    parser.add_argument("--latex", help="LaTeX output", action='store_true')
+    args = parser.parse_args()
+
+    with args.data.open(mode="rt") as f:
         results = json.load(f)
 
     approaches = set()
     data = defaultdict(dict)
     for family, family_results in results.items():
         for instance, instance_data in family_results.get("results", {}).items():
-            size = instance_data.get("size", 0)
+            d = instance_data["data"]
+            size = d.get("states", 0)
+            if size == "error":
+                size = -1
+            components = d.get("components", 0)
+            if components == "error":
+                components = -1
+            largest_component = d.get("largest_component", 0)
+            if largest_component == "error":
+                largest_component = -1
+            if args.only == "one_state_scc":
+                if largest_component != 1:
+                    continue
+            elif args.only == "single_scc":
+                if largest_component != size:
+                    continue
+
             for approach, approach_result in instance_data.get("results", {}).items():
                 approaches.add(approach)
-                data[(family_results.get("type", "?"), family, size, instance)][approach] = approach_result
+                data[(family_results["type"].lower(), family, size, components, largest_component, instance)][approach] = approach_result
     approaches = list(sorted(approaches))
-    header = ["model", "size"] + approaches
+    header = ["type", "instance", "size", "components", "largest_component"] + approaches
     rows = []
     for key in sorted(data.keys()):
-        model_type, family, size, instance = key
-        row = [f"{model_type}/{family}/{instance}", size]
+        model_type, family, size, components, largest_component, instance = key
+        row = [model_type, f"{family}/{instance}", size, components, largest_component]
         for approach in approaches:
             result = data[key].get(approach, None)
             if result is None or "type" not in result:
@@ -49,4 +74,4 @@ if __name__ == "__main__":
                 else:
                     row.append(f"?{result_type}?")
         rows.append(row)
-    print(tabulate.tabulate(rows, header))
+    print(tabulate.tabulate(rows, header, tablefmt="latex" if args.latex else "simple"))

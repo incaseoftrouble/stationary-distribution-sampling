@@ -1,7 +1,7 @@
 package stationary.component;
 
+import de.tum.in.probmodels.values.Bounds;
 import it.unimi.dsi.fastutil.ints.IntSet;
-import stationary.util.Bound;
 
 public final class AbsorbingComponent extends BottomComponent {
   private final int state;
@@ -33,8 +33,8 @@ public final class AbsorbingComponent extends BottomComponent {
   }
 
   @Override
-  public Bound frequency(int s) {
-    return Bound.ONE;
+  public Bounds frequency(int s) {
+    return Bounds.reachOne();
   }
 
   @Override
