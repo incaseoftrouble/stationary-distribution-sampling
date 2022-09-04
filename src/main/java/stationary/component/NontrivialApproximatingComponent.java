@@ -1,105 +1,129 @@
 package stationary.component;
 
 import de.tum.in.probmodels.graph.Component;
+import de.tum.in.probmodels.model.distribution.Distribution;
 import de.tum.in.probmodels.util.Util;
-import it.unimi.dsi.fastutil.ints.Int2DoubleMap;
-import it.unimi.dsi.fastutil.ints.Int2DoubleOpenHashMap;
-import it.unimi.dsi.fastutil.ints.Int2LongLinkedOpenHashMap;
-import it.unimi.dsi.fastutil.ints.Int2LongMap;
-import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
-import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
+import de.tum.in.probmodels.values.Bounds;
+import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
 import it.unimi.dsi.fastutil.ints.IntHeapPriorityQueue;
-import it.unimi.dsi.fastutil.ints.IntIterator;
 import it.unimi.dsi.fastutil.ints.IntPriorityQueue;
-import stationary.util.Bound;
+import java.util.Arrays;
 import stationary.util.Check;
 
 public final class NontrivialApproximatingComponent extends NontrivialComponent {
-  private final IntPriorityQueue queue;
-  private final Int2ObjectMap<Int2DoubleMap> iteration;
-  private final Int2ObjectMap<Bound> frequencyBounds;
-  private final Int2LongMap samplingCounts;
 
   private double lowerBoundCache = 0.0;
-  private double precisionGuide = 1.0;
+  private double maximalErrorCache = 1.0;
+  private double precisionGuide = 0.1;
+
+  private boolean enableRegularization = false;
+
+  private final Distribution[] distributions;
+  private final IntPriorityQueue queue;
+  private final double[][] iteration;
+  private double[] next;
+  private final Bounds[] frequencyBounds;
+  private final Int2IntOpenHashMap renumbering;
 
   public NontrivialApproximatingComponent(int index, Component component) {
     super(index, component);
 
     int size = component.size();
 
-    iteration = new Int2ObjectOpenHashMap<>(size);
-    component.states().forEach((int s) -> iteration.put(s, new Int2DoubleOpenHashMap()));
+    renumbering = new Int2IntOpenHashMap(size);
 
-    frequencyBounds = new Int2ObjectOpenHashMap<>(size);
-    component.states().forEach((int s) -> frequencyBounds.put(s, Bound.UNKNOWN));
+    int n = 0;
+    var renumberIterator = component.states().iterator();
+    while (renumberIterator.hasNext()) {
+      int s = renumberIterator.nextInt();
+      renumbering.put(s, n);
+      n+= 1;
+    }
 
-    samplingCounts = new Int2LongLinkedOpenHashMap(size);
-    component.states().forEach((int s) -> {
+    n = 0;
+    distributions = new Distribution[size];
+    var remapIterator = component.states().iterator();
+    while (remapIterator.hasNext()) {
+      distributions[n] = component.onlyChoice(remapIterator.nextInt()).distribution().map(renumbering).build();
+      n+= 1;
+    }
+
+    iteration = new double[size][size];
+    next = new double[size];
+
+    frequencyBounds = new Bounds[size];
+    Arrays.fill(frequencyBounds, Bounds.reachUnknown());
+
+    long[] samplingCounts = new long[size];
+    for (int s = 0; s < size; s++) {
       int current = s;
       for (int i = 0; i < size; i++) {
-        current = component.onlyChoice(current).distribution().sample();
+        current = distributions[current].sample();
       }
       for (int i = 0; i < size; i++) {
-        current = component.onlyChoice(current).distribution().sample();
-        samplingCounts.mergeLong(current, 1L, Long::sum);
+        current = distributions[current].sample();
+        samplingCounts[current] += 1;
       }
-    });
+    }
 
+    // queue = new IntArrayFIFOQueue();
     queue = new IntHeapPriorityQueue((int a, int b) -> {
-      double aError = stateErrorBound(a);
-      double bError = stateErrorBound(b);
+      Bounds aBounds = frequencyBounds[a];
+      double aError = aBounds.difference() * aBounds.upperBound();
+      Bounds bBounds = frequencyBounds[b];
+      double bError = bBounds.difference() * bBounds.upperBound();
       if (Util.isEqual(aError, bError)) {
-        return Long.compare(samplingCounts.get(b), samplingCounts.get(a));
+        return Long.compare(samplingCounts[b], samplingCounts[a]);
       }
       return aError < bError ? 1 : -1;
     });
-    component.states().forEach(queue::enqueue);
-  }
-
-  private double stateErrorBound(int s) {
-    Bound bound = frequencyBounds.get(s);
-    double upperBound = 1.0 - lowerBoundCache + bound.lower();
-    return Math.min(bound.difference(), upperBound);
+    for (int i = 0; i < size; i++) {
+      queue.enqueue(i);
+    }
   }
 
   @Override
   protected void doUpdate(int initialState) {
     int size = component.size();
 
-    for (int i = 0; i < 10; i++) {
+    if (queue.isEmpty()) {
+      increasePrecision();
+    }
+    if (lowerBoundCache == 0.0 && getVisitCount() > size) {
+      enableRegularization = true;
+    }
+
+    var next = this.next;
+    for (int i = 0; i < Math.max(size / 10, 10); i++) {
       if (queue.isEmpty()) {
         break;
       }
       int s = queue.dequeueInt();
 
-      Int2DoubleMap map = iteration.get(s);
-      map.defaultReturnValue(0.0);
-      Int2DoubleMap current = map;
-      Int2DoubleMap next = new Int2DoubleOpenHashMap(size);
-      next.defaultReturnValue(0.0);
+      double[] current = iteration[s];
 
-      Bound bound = null;
+      Bounds bound = null;
       for (int step = 0; step < size; step++) {
         double minimalDifference = Double.MAX_VALUE;
         double maximalDifference = Double.MIN_VALUE;
 
-        IntIterator iterator = component.states().iterator();
-        while (iterator.hasNext()) {
-          int t = iterator.nextInt();
-
-          double value = component.onlyChoice(t).distribution().sumWeighted(current);
+        for (int t = 0; t < size; t++) {
+          double currentValue = current[t];
+          double value = distributions[t].sumWeighted(current);
+          if (enableRegularization) {
+            value = 0.01 * currentValue + 0.99 * value;
+          }
           if (s == t) {
             value += 1.0;
           }
-          assert value >= current.get(t);
+          assert value >= currentValue;
 
           double stepDifference;
+          next[t] = value;
           if (value > 0.0) {
-            next.put(t, value);
-            stepDifference = value - current.get(t);
+            stepDifference = value - currentValue;
           } else {
-            assert current.get(t) == 0.0;
+            assert currentValue == 0.0;
             stepDifference = 0.0;
           }
           if (stepDifference > maximalDifference) {
@@ -110,8 +134,8 @@ public final class NontrivialApproximatingComponent extends NontrivialComponent 
           }
         }
 
-        bound = Bound.of(minimalDifference, maximalDifference);
-        Int2DoubleMap swap = next;
+        bound = Bounds.reach(minimalDifference, maximalDifference);
+        double[] swap = next;
         next = current;
         current = swap;
         if (bound.difference() < precisionGuide) {
@@ -119,24 +143,29 @@ public final class NontrivialApproximatingComponent extends NontrivialComponent 
         }
       }
       //noinspection ObjectEquality
-      if (current != map) {
-        iteration.put(s, current);
+      if (current != next) {
+        iteration[s] = next;
+        next = current;
       }
 
       assert bound != null;
-      frequencyBounds.put(s, bound);
-      if (!Util.isZero(bound.difference())) {
+      frequencyBounds[s] =  bound;
+      if (bound.difference() > precisionGuide) {
         queue.enqueue(s);
       }
     }
-    lowerBoundCache = frequencyBounds.values().stream().mapToDouble(Bound::lower).sum();
-    if (!queue.isEmpty() && frequencyBounds.get(queue.firstInt()).difference() < precisionGuide) {
-      increasePrecision();
-    }
+    this.next = next;
+    lowerBoundCache = Arrays.stream(frequencyBounds).mapToDouble(Bounds::lowerBound).sum();
+    maximalErrorCache = Arrays.stream(frequencyBounds).mapToDouble(Bounds::difference).max().orElseThrow();
   }
 
   public void increasePrecision() {
     this.precisionGuide /= 2.0;
+    for (int s = 0; s < frequencyBounds.length; s++) {
+      if (frequencyBounds[s].difference() > precisionGuide) {
+        queue.enqueue(s);
+      }
+    }
   }
 
   public void setMinimalPrecision(double precision) {
@@ -147,14 +176,16 @@ public final class NontrivialApproximatingComponent extends NontrivialComponent 
   public double error() {
     // double error = this.stateError.values().doubleStream().max().orElseThrow();
     // assert Util.lessOrEqual(0.0, error) && Util.lessOrEqual(error, 1.0);
-    return 1.0 - lowerBoundCache;
+    return Math.max(Math.min(1.0 - lowerBoundCache, maximalErrorCache), 0.0);
   }
 
   @Override
-  public Bound frequency(int state) {
+  public Bounds frequency(int state) {
     assert Check.checkFrequency(component.states(),
-        s -> frequencyBounds.get(s).lower(),
+        s -> frequencyBounds[renumbering.get(s)].lowerBound(),
         s -> component.onlyChoice(s).distribution(), error());
-    return frequencyBounds.get(state);
+    Bounds bound = frequencyBounds[renumbering.get(state)];
+    double upperBound = 1.0 - lowerBoundCache + bound.lowerBound();
+    return bound.upperBound() <= upperBound ? bound : bound.withUpper(upperBound);
   }
 }

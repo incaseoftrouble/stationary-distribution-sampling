@@ -12,5 +12,5 @@ tar -czf sources.tar.gz \
   models/ \
   lib/Jeigen-onefat.jar \
   \
-  build.gradle settings.gradle \
-  lib/models/build.gradle lib/models/settings.gradle
+  build.gradle.kts settings.gradle.kts \
+  lib/models/build.gradle.kts lib/models/settings.gradle.kts

@@ -1,13 +1,13 @@
 package stationary;
 
 import de.tum.in.naturals.bitset.BitSets;
-import de.tum.in.probmodels.SelfLoopHandling;
 import de.tum.in.probmodels.explorer.DefaultExplorer;
+import de.tum.in.probmodels.explorer.SelfLoopHandling;
 import de.tum.in.probmodels.generator.Generator;
 import de.tum.in.probmodels.graph.BsccComponentAnalyser;
 import de.tum.in.probmodels.graph.Component;
-import de.tum.in.probmodels.model.impl.DenseDeterministicStochasticSystem;
-import de.tum.in.probmodels.prism.model.DenseMarkovChainView;
+import de.tum.in.probmodels.impl.prism.model.DenseMarkovChainView;
+import de.tum.in.probmodels.model.MutableDenseSystem;
 import explicit.DTMCModelChecker;
 import explicit.ModelCheckerResult;
 import explicit.ProbModelChecker;
@@ -29,14 +29,12 @@ import stationary.util.FrequencyRecord;
 public final class StationaryDistributionSolver {
   private static final Logger logger = Logger.getLogger(StationaryDistributionSolver.class.getName());
 
-  private final DefaultExplorer<State, DenseDeterministicStochasticSystem> explorer;
+  private final DefaultExplorer<State, MutableDenseSystem> explorer;
   private final double precision;
-  private final DenseDeterministicStochasticSystem model;
   private final BsccComponentAnalyser analyser = new BsccComponentAnalyser();
 
   public StationaryDistributionSolver(Generator<State> generator, double precision) {
-    this.model = new DenseDeterministicStochasticSystem();
-    this.explorer = DefaultExplorer.of(this.model, generator, SelfLoopHandling.KEEP);
+    this.explorer = DefaultExplorer.of(generator, SelfLoopHandling.KEEP);
     this.precision = precision;
   }
 
@@ -45,10 +43,10 @@ public final class StationaryDistributionSolver {
   }
 
   public Int2ObjectMap<FrequencyRecord> solve() throws PrismException {
-    int initialState = model.onlyInitialState();
-    explorer.exploreReachable();
+    explorer.exploreReachable(explorer.initialStateIds());
+    int initialState = explorer.onlyInitialStateId();
 
-    var bottomComponents = analyser.findComponents(model);
+    var bottomComponents = analyser.findComponents(explorer.partialSystem());
     if (logger.isLoggable(Level.FINE)) {
       logger.log(Level.FINE, String.format("Found %d BSCCs with %d states",
           bottomComponents.size(), bottomComponents.stream().mapToInt(Component::size).sum()));
@@ -72,7 +70,7 @@ public final class StationaryDistributionSolver {
     double[] reachability = new double[components.size()];
     for (BottomComponent component : components) {
       component.update(component.states().intIterator().nextInt());
-      ModelCheckerResult result = mc.computeReachProbs(new DenseMarkovChainView(model), BitSets.of(component.states()));
+      ModelCheckerResult result = mc.computeReachProbs(new DenseMarkovChainView(explorer.partialSystem()), BitSets.of(component.states()));
       reachability[component.index] = result.soln[initialState];
     }
 
@@ -80,7 +78,7 @@ public final class StationaryDistributionSolver {
     for (BottomComponent component : components) {
       double componentReachability = reachability[component.index];
       component.states().intStream().forEach((int s) ->
-          frequency.put(s, new FrequencyRecord(component.frequency(s).lower() * componentReachability, 1.0e-6)));
+          frequency.put(s, new FrequencyRecord(component.frequency(s).lowerBound() * componentReachability, precision)));
     }
 
     return frequency;

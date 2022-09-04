@@ -4,12 +4,12 @@ import de.tum.in.naturals.Indices;
 import de.tum.in.probmodels.graph.Component;
 import de.tum.in.probmodels.model.distribution.Distribution;
 import de.tum.in.probmodels.util.Util;
+import de.tum.in.probmodels.values.Bounds;
 import it.unimi.dsi.fastutil.ints.Int2DoubleMap;
 import it.unimi.dsi.fastutil.ints.Int2DoubleOpenHashMap;
 import it.unimi.dsi.fastutil.ints.IntIterator;
 import java.util.function.IntUnaryOperator;
 import jeigen.DenseMatrix;
-import stationary.util.Bound;
 import stationary.util.Check;
 
 public final class NontrivialSolvingComponent extends NontrivialComponent {
@@ -73,7 +73,7 @@ public final class NontrivialSolvingComponent extends NontrivialComponent {
   }
 
   @Override
-  public Bound frequency(int state) {
-    return Bound.exact(frequency.get(state));
+  public Bounds frequency(int state) {
+    return Bounds.reach(frequency.get(state));
   }
 }

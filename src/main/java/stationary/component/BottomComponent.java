@@ -1,8 +1,8 @@
 package stationary.component;
 
+import de.tum.in.probmodels.values.Bounds;
 import it.unimi.dsi.fastutil.HashCommon;
 import it.unimi.dsi.fastutil.ints.IntSet;
-import stationary.util.Bound;
 
 public abstract class BottomComponent {
   public final int index;
@@ -18,7 +18,7 @@ public abstract class BottomComponent {
 
   public abstract double error();
 
-  public abstract Bound frequency(int state);
+  public abstract Bounds frequency(int state);
 
   public boolean contains(int state) {
     return states().contains(state);

@@ -1,0 +1,1 @@
+{"branch.pm/loops=100,steps=20,p=0.001,levels=1000": {"states": 107079, "components": 1000, "largest_component": 100}, "branch.pm/loops=1000,steps=20,p=0.001,levels=1000": {"states": 1007079, "components": 1000, "largest_component": 1000}}

@@ -1,2 +1,2 @@
 model_file,model_consts,model_type,states,time_constr
-branch.pm,"loops=500,steps=100,p=0.008,levels=1000",DTMC,587079,1.2630681991577148
+branch.pm,"loops=1000,steps=20,p=0.001,levels=1000",DTMC,1007079,1.70
