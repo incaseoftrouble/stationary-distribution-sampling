@@ -52,7 +52,7 @@ public final class NontrivialApproximatingComponent extends NontrivialComponent 
     next = new double[size];
 
     frequencyBounds = new Bounds[size];
-    Arrays.fill(frequencyBounds, Bounds.reachUnknown());
+    Arrays.fill(frequencyBounds, Bounds.unknownReach());
 
     long[] samplingCounts = new long[size];
     for (int s = 0; s < size; s++) {

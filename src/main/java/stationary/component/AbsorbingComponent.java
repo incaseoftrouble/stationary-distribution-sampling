@@ -34,7 +34,7 @@ public final class AbsorbingComponent extends BottomComponent {
 
   @Override
   public Bounds frequency(int s) {
-    return Bounds.reachOne();
+    return Bounds.one();
   }
 
   @Override

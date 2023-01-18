@@ -9,7 +9,14 @@ import subprocess
 import time
 from typing import List, Optional, Dict
 
-ALL_APPROACHES = {"solve", "approximate", "approximate-naive", "approximate-solve", "prism", "prism-explicit"}
+ALL_APPROACHES = {
+    "solve",
+    "approximate",
+    "approximate-naive",
+    "approximate-solve",
+    "prism",
+    "prism-explicit",
+}
 
 
 @dataclasses.dataclass
@@ -19,12 +26,18 @@ class ModelInstance(object):
     constants: str
 
     def __str__(self):
-        return f"{self.path.name}/{self.constants}" if self.constants else self.path.name
+        return (
+            f"{self.path.name}/{self.constants}" if self.constants else self.path.name
+        )
 
     def __lt__(self, other):
         size = self.data["states"] if self.data.get("states", None) else 0
         other_size = other.data["states"] if other.data.get("states", None) else 0
-        return (size, self.path.name, self.constants) < (other_size, other.path.name, other.constants)
+        return (size, self.path.name, self.constants) < (
+            other_size,
+            other.path.name,
+            other.constants,
+        )
 
 
 @dataclasses.dataclass
@@ -48,9 +61,7 @@ class Result(abc.ABC):
 @dataclasses.dataclass
 class Timeout(Result):
     def to_json(self):
-        return {
-            "type": "timeout"
-        }
+        return {"type": "timeout"}
 
     def __str__(self):
         return f"Timeout"
@@ -66,7 +77,7 @@ class Error(Result):
             "type": "error",
             "code": self.code,
             "time": self.time,
-            "error": self.error_type
+            "error": self.error_type,
         }
 
     def __str__(self):
@@ -76,10 +87,7 @@ class Error(Result):
 @dataclasses.dataclass
 class Success(Result):
     def to_json(self):
-        return {
-            "type": "success",
-            "time": self.time
-        }
+        return {"type": "success", "time": self.time}
 
 
 class Approach(abc.ABC):
@@ -100,11 +108,20 @@ class SdsApproach(Approach):
         self.supported_models = supported_models
 
     def supports(self, model, instance):
-        return self.supported_models is None or model.model_type in self.supported_models
+        return (
+            self.supported_models is None or model.model_type in self.supported_models
+        )
 
     def create_args(self, instance, uniformization_constant=None):
-        return [self.executable, instance.path, "--const", instance.constants,
-                "--uniformization", "1.0" if uniformization_constant is None else str(uniformization_constant), *self.arguments]
+        return [
+            self.executable,
+            instance.path,
+            "--const",
+            instance.constants,
+            "--uniformization",
+            "1.0" if uniformization_constant is None else str(uniformization_constant),
+            *self.arguments,
+        ]
 
     def __hash__(self):
         return hash(self.name)
@@ -118,8 +135,14 @@ class SdsApproach(Approach):
 
 def run(arguments, timelimit):
     start = time.time()
-    process = subprocess.Popen(arguments, stderr=subprocess.PIPE, stdout=subprocess.PIPE, encoding="utf-8", text=True,
-                               env={"JAVA_OPTS": "-Xmx10G"})
+    process = subprocess.Popen(
+        arguments,
+        stderr=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        encoding="utf-8",
+        text=True,
+        env={"JAVA_OPTS": "-Xmx10G"},
+    )
     try:
         stdout, stderr = process.communicate(timeout=timelimit)
         duration = time.time() - start
@@ -197,7 +220,16 @@ def execute(args):
 
                     if not row[3]:
                         print(f"Computing states of {identifier} ... ", end="")
-                        result = run([args.executable, model_path, "--const", constants, "stats"], 300)
+                        result = run(
+                            [
+                                args.executable,
+                                model_path,
+                                "--const",
+                                constants,
+                                "stats",
+                            ],
+                            300,
+                        )
                         if isinstance(result, Success):
                             print(result.output.strip())
                             row[3] = str(int(result.output))
@@ -209,11 +241,25 @@ def execute(args):
 
                     data["states"] = int(row[3]) if row[3] else "error"
                     if "components" not in data:
-                        print(f"Computing components of {name}/{constants} ... ", end="")
-                        result = run([args.executable, model_path, "--const", constants, "stats", "--components"], 300)
+                        print(
+                            f"Computing components of {name}/{constants} ... ", end=""
+                        )
+                        result = run(
+                            [
+                                args.executable,
+                                model_path,
+                                "--const",
+                                constants,
+                                "stats",
+                                "--components",
+                            ],
+                            300,
+                        )
                         if isinstance(result, Success):
                             print(",".join(result.output.split()))
-                            _, components, largest_component = map(int, result.output.split())
+                            _, components, largest_component = map(
+                                int, result.output.split()
+                            )
                             data["components"] = components
                             data["largest_component"] = largest_component
                         else:
@@ -222,8 +268,20 @@ def execute(args):
                             data["largest_component"] = "error"
 
                     if model_type.lower() == "ctmc" and "uniformization" not in data:
-                        print(f"Computing uniformization constant of {name}/{constants} ... ", end="")
-                        result = run([args.executable, model_path, "--const", constants, "uniformization"], 300)
+                        print(
+                            f"Computing uniformization constant of {name}/{constants} ... ",
+                            end="",
+                        )
+                        result = run(
+                            [
+                                args.executable,
+                                model_path,
+                                "--const",
+                                constants,
+                                "uniformization",
+                            ],
+                            300,
+                        )
                         if isinstance(result, Success):
                             data["uniformization"] = float(result.output)
                             print("done")
@@ -252,24 +310,61 @@ def execute(args):
     if "solve" in approach_names:
         approaches.add(SdsApproach("solve", args.executable, ["solve"]))
     if "approximate" in approach_names:
-        approaches.add(SdsApproach("approx", args.executable,
-                                   ["approximate", "--precision", "1e-4", "--sampling", "SAMPLE_TARGET"]))
+        approaches.add(
+            SdsApproach(
+                "approx",
+                args.executable,
+                ["approximate", "--precision", "1e-4", "--sampling", "SAMPLE_TARGET"],
+            )
+        )
     if "approximate-naive" in approach_names:
-        approaches.add(SdsApproach("approx-naive", args.executable,
-                                   ["approximate", "--precision", "1e-4", "--sampling", "SAMPLE_NAIVE"]))
+        approaches.add(
+            SdsApproach(
+                "approx-naive",
+                args.executable,
+                ["approximate", "--precision", "1e-4", "--sampling", "SAMPLE_NAIVE"],
+            )
+        )
     if "approximate-solve" in approach_names:
-        approaches.add(SdsApproach("approx-solve", args.executable,
-                                   ["approximate", "--precision", "1e-6", "--sampling", "SAMPLE_TARGET", "--solve-bsccs"]))
+        approaches.add(
+            SdsApproach(
+                "approx-solve",
+                args.executable,
+                [
+                    "approximate",
+                    "--precision",
+                    "1e-4",
+                    "--sampling",
+                    "SAMPLE_TARGET",
+                    "--solve-bsccs",
+                ],
+            )
+        )
     if "prism" in approach_names:
-        approaches.add(SdsApproach("prism", args.executable, ["prism", "--precision", "1e-4"], {"ctmc", "dtmc"}))
+        approaches.add(
+            SdsApproach(
+                "prism",
+                args.executable,
+                ["prism", "--precision", "1e-4"],
+                {"ctmc", "dtmc"},
+            )
+        )
     if "prism-explicit" in approach_names:
-        approaches.add(SdsApproach("prism-explicit", args.executable, ["prism", "--precision", "1e-4", "--explicit"]))
+        approaches.add(
+            SdsApproach(
+                "prism-explicit",
+                args.executable,
+                ["prism", "--precision", "1e-4", "--explicit"],
+            )
+        )
     timeout = args.timelimit
 
     for model in models:
         if args.type and model.model_type not in args.type:
             continue
-        if args.name and not any(re.search(pattern, model.model_name) for pattern in args.name):
+        if args.name and not any(
+            re.search(pattern, model.model_name) for pattern in args.name
+        ):
             continue
 
         if model.model_name not in results:
@@ -285,7 +380,7 @@ def execute(args):
         instances: List[ModelInstance] = model.instances
         skipped_approaches = set()
         if args.familylimit and len(instances) > args.familylimit:
-            instances = instances[:args.familylimit]
+            instances = instances[: args.familylimit]
         for instance in instances:
             instance: ModelInstance
             instance_key = str(instance)
@@ -314,24 +409,45 @@ def execute(args):
 
             instance_approaches = set(approaches)
             if single_scc:
-                non_approx_approaches = {approach for approach in instance_approaches
-                                         if not isinstance(approach, SdsApproach) or approach.arguments[0] != "approximate"}
+                non_approx_approaches = {
+                    approach
+                    for approach in instance_approaches
+                    if not isinstance(approach, SdsApproach)
+                    or approach.arguments[0] != "approximate"
+                }
                 if non_approx_approaches != instance_approaches:
-                    non_approx_approaches.add(SdsApproach("approx", args.executable, ["approximate", "--precision", "1e-4",
-                                                                                      "--sampling", "SAMPLE_TARGET", "--explore"]))
+                    non_approx_approaches.add(
+                        SdsApproach(
+                            "approx",
+                            args.executable,
+                            [
+                                "approximate",
+                                "--precision",
+                                "1e-4",
+                                "--sampling",
+                                "SAMPLE_TARGET",
+                                "--explore",
+                            ],
+                        )
+                    )
                     instance_approaches = non_approx_approaches
 
             for approach in instance_approaches:
                 if args.rerun and approach.name in instance_results:
                     del instance_results[approach.name]
 
-                if approach.name in instance_results and instance_results[approach.name]["type"] == "skipped":
+                if (
+                    approach.name in instance_results
+                    and instance_results[approach.name]["type"] == "skipped"
+                ):
                     skipped_approaches.add(approach)
                     continue
 
                 if args.rerun_error:
-                    if approach.name in instance_results and (instance_results[approach.name]["type"] != "error"
-                                                              or instance_results[approach.name].get("error", "") != "generic"):
+                    if approach.name in instance_results and (
+                        instance_results[approach.name]["type"] != "error"
+                        or instance_results[approach.name].get("error", "") != "generic"
+                    ):
                         continue
                 else:
                     if approach.name in instance_results:
@@ -356,18 +472,42 @@ def execute(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Run a (sub-)set of experiments')
+    parser = argparse.ArgumentParser(description="Run a (sub-)set of experiments")
 
-    parser.add_argument('--type', help="Filter by model type (DTMC, CTMC, MDP)", nargs="*")
-    parser.add_argument('--name', help="Filter by name", nargs="*")
-    parser.add_argument('--approach', help=f"Filter by approach ({', '.join(ALL_APPROACHES)})", nargs="*",
-                        default=list(ALL_APPROACHES))
-    parser.add_argument('--exclude-approach', help="Exclude approaches", nargs="*")
-    parser.add_argument('--timelimit', help="Execution time limit in seconds", type=float, default=60)
-    parser.add_argument('--familylimit', help="Limit number of executions per model family (same model with different constants)",
-                        type=int)
-    parser.add_argument('--results', help="Results file to load partial results and write results", type=pathlib.Path)
-    parser.add_argument('--executable', help="Path to SDS executable", type=str, default="sds")
-    parser.add_argument('--rerun-error', help="Rerun failed experiments", default=False, action='store_true')
-    parser.add_argument('--rerun', help="Rerun all experiments", default=False, action='store_true')
+    parser.add_argument(
+        "--type", help="Filter by model type (DTMC, CTMC, MDP)", nargs="*"
+    )
+    parser.add_argument("--name", help="Filter by name", nargs="*")
+    parser.add_argument(
+        "--approach",
+        help=f"Filter by approach ({', '.join(ALL_APPROACHES)})",
+        nargs="*",
+        default=list(ALL_APPROACHES),
+    )
+    parser.add_argument("--exclude-approach", help="Exclude approaches", nargs="*")
+    parser.add_argument(
+        "--timelimit", help="Execution time limit in seconds", type=float, default=60
+    )
+    parser.add_argument(
+        "--familylimit",
+        help="Limit number of executions per model family (same model with different constants)",
+        type=int,
+    )
+    parser.add_argument(
+        "--results",
+        help="Results file to load partial results and write results",
+        type=pathlib.Path,
+    )
+    parser.add_argument(
+        "--executable", help="Path to SDS executable", type=str, default="sds"
+    )
+    parser.add_argument(
+        "--rerun-error",
+        help="Rerun failed experiments",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
+        "--rerun", help="Rerun all experiments", default=False, action="store_true"
+    )
     execute(parser.parse_args())

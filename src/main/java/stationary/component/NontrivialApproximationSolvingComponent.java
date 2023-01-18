@@ -18,7 +18,6 @@ public final class NontrivialApproximationSolvingComponent extends NontrivialCom
   private double error = 1.0;
   private final double precision;
 
-
   public NontrivialApproximationSolvingComponent(int index, Component component, double precision) {
     super(index, component);
     this.precision = precision;
@@ -71,7 +70,7 @@ public final class NontrivialApproximationSolvingComponent extends NontrivialCom
           double currentValue = current[t];
           double value = distributions[t].sumWeighted(current);
           if (enableRegularization) {
-            value = 0.01 * currentValue + 0.99 * value;
+            value = 0.05 * currentValue + 0.95 * value;
           }
           if (s == t) {
             value += 1.0;
@@ -126,6 +125,6 @@ public final class NontrivialApproximationSolvingComponent extends NontrivialCom
     assert Check.checkFrequency(component.states(),
         s -> frequencyBounds.get(s).lowerBound(),
         s -> component.onlyChoice(s).distribution(), error());
-    return frequencyBounds.getOrDefault(state, Bounds.reachUnknown());
+    return frequencyBounds.getOrDefault(state, Bounds.unknownReach());
   }
 }

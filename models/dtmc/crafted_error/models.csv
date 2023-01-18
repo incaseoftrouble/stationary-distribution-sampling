@@ -1,3 +1,4 @@
 model_file,model_consts,model_type,states,time_constr
 error.pm,"p=0.5,e=0.0000001",DTMC,4,0.31324315071105957
-error_hybrid.pm,"p=0.5,e=0.0000001",DTMC,4,0.30152225494384766
+error_hybrid.pm,e=0.0000001,DTMC,4,0.30152225494384766
+,,,

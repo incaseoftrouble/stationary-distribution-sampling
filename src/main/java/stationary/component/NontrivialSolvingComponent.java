@@ -7,6 +7,7 @@ import de.tum.in.probmodels.util.Util;
 import de.tum.in.probmodels.values.Bounds;
 import it.unimi.dsi.fastutil.ints.Int2DoubleMap;
 import it.unimi.dsi.fastutil.ints.Int2DoubleOpenHashMap;
+import it.unimi.dsi.fastutil.ints.IntIterable;
 import it.unimi.dsi.fastutil.ints.IntIterator;
 import java.util.function.IntUnaryOperator;
 import jeigen.DenseMatrix;
@@ -29,7 +30,7 @@ public final class NontrivialSolvingComponent extends NontrivialComponent {
       int size = component.size();
       DenseMatrix matrix = new DenseMatrix(size, size);
       {
-        IntUnaryOperator stateToIndexMap = Indices.elementToIndexMap(component.states());
+        IntUnaryOperator stateToIndexMap = Indices.elementToIndexMap((IntIterable) component.states());
         IntIterator iterator = component.states().iterator();
         int index = 0;
         while (iterator.hasNext()) {

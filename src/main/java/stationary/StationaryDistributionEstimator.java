@@ -220,7 +220,7 @@ public final class StationaryDistributionEstimator {
     }
     double bound = 0.0;
     for (Int2ObjectMap<Bounds> map : componentStateReachability) {
-      bound += map.getOrDefault(state, Bounds.reachUnknown()).lowerBound();
+      bound += map.getOrDefault(state, Bounds.unknownReach()).lowerBound();
     }
     return bound;
   }
@@ -259,9 +259,9 @@ public final class StationaryDistributionEstimator {
     return state -> {
       BottomComponent stateComponent = statesInBottomComponents.get(state);
       if (stateComponent == null) {
-        return reachability.getOrDefault(state, Bounds.reachUnknown());
+        return reachability.getOrDefault(state, Bounds.unknownReach());
       }
-      return stateComponent.equals(component) ? Bounds.reachOne() : Bounds.reachZero();
+      return stateComponent.equals(component) ? Bounds.one() : Bounds.zero();
     };
   }
 
@@ -276,7 +276,7 @@ public final class StationaryDistributionEstimator {
     for (Int2ObjectMap<Bounds> bounds : componentStateReachability) {
       for (Int2ObjectMap.Entry<KahanSum> entry : stateAbsorptionProbabilities.int2ObjectEntrySet()) {
         int state = entry.getIntKey();
-        Bounds currentBounds = bounds.getOrDefault(state, Bounds.reachUnknown());
+        Bounds currentBounds = bounds.getOrDefault(state, Bounds.unknownReach());
         KahanSum stateAbsorption = entry.getValue();
         double globalUpper = KahanSum.of(1.0, -stateAbsorption.get(), currentBounds.lowerBound());
         if (currentBounds.upperBound() > globalUpper) {
@@ -499,7 +499,7 @@ public final class StationaryDistributionEstimator {
         ComponentUpdate component = iterator.next();
         Bounds bounds = transitions.sumWeightedBounds(component.reachabilityBounds);
         assert !bounds.isNaN();
-        if (bounds.equalsUpTo(Bounds.reachUnknown())) {
+        if (bounds.equalsUpTo(Bounds.unknownReach())) {
           iterator.remove();
         } else {
           component.updateFunction.accept(state, bounds);
