@@ -22,7 +22,7 @@ RUN cd /opt \
 FROM debian:bullseye
 
 WORKDIR /opt
-RUN apt-get update && apt-get install -y openjdk-17-jre-headless python3 time \
+RUN apt-get update && apt-get install -y openjdk-17-jre-headless python3 python3-tabulate time \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=prism /opt/prism /opt/prism

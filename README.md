@@ -2,6 +2,7 @@
 
 ## Building
 
+* Extract sources if necessary
 * Run `docker build -t sds .`
 
 ## Running
